@@ -104,6 +104,7 @@ impl FileSystem for BlobFs {
     type Inode = Inode;
     type Handle = Handle;
 
+    #[allow(clippy::let_unit_value)]
     fn init(&self, capable: FsOptions) -> io::Result<FsOptions> {
         #[cfg(feature = "virtiofs")]
         let _ = self.bootstrap_args.get_rafs_handle()?;

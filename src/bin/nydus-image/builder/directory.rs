@@ -27,6 +27,7 @@ impl FilesystemTreeBuilder {
         Self {}
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     /// Walk directory to build node tree by DFS
     fn load_children(
         &self,
@@ -122,7 +123,7 @@ impl Builder for DirectoryBuilder {
         blob_mgr: &mut BlobManager,
     ) -> Result<BuildOutput> {
         let mut bootstrap_ctx = bootstrap_mgr.create_ctx(ctx.inline_bootstrap)?;
-        let layer_idx = if bootstrap_ctx.layered { 1u16 } else { 0u16 };
+        let layer_idx = u16::from(bootstrap_ctx.layered);
         // Scan source directory to build upper layer tree.
         let mut tree = self.build_tree_from_fs(ctx, &mut bootstrap_ctx, layer_idx)?;
 

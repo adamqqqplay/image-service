@@ -116,6 +116,7 @@ impl<'a, F: FnMut(BlobIoRange)> BlobIoMergeState<'a, F> {
     }
 }
 
+#[allow(clippy::type_complexity)]
 /// Trait representing a cache object for a blob on backend storage.
 ///
 /// The caller may use the `BlobCache` trait to access blob data on backend storage, with an

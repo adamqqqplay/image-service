@@ -48,8 +48,10 @@ use std::sync::Arc;
 use crate::metadata::{RafsInode, RafsSuper};
 
 pub mod fs;
+#[allow(clippy::unnecessary_cast)]
 pub mod metadata;
 #[cfg(test)]
+#[allow(clippy::unnecessary_cast)]
 pub mod mock;
 
 /// Error codes for rafs related operations.
@@ -319,7 +321,7 @@ mod tests {
         let bootstrap = OpenOptions::new()
             .read(true)
             .write(false)
-            .open(&path)
+            .open(path)
             .unwrap();
         let mut rs = RafsSuper {
             mode: RafsMode::Direct,

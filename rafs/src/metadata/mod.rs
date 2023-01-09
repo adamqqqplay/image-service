@@ -778,6 +778,7 @@ impl RafsSuper {
         self.walk_dir_inner(inode.as_ref(), parent, cb)
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn walk_dir_inner(
         &self,
         inode: &dyn RafsInode,

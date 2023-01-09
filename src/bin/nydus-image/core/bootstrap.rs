@@ -129,6 +129,7 @@ impl Bootstrap {
         Ok(tree)
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     /// Traverse node tree, set inode index, ino, child_index and child_count etc according to the
     /// RAFS metadata format, then store to nodes collection.
     fn build_rafs(
@@ -262,6 +263,7 @@ impl Bootstrap {
         Ok(())
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     /// Rafsv6 update offset
     fn update_dirents(&self, nodes: &mut Vec<Node>, tree: &mut Tree, parent_offset: u64) {
         let node = &mut nodes[tree.node.index as usize - 1];
