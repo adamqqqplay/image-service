@@ -76,6 +76,13 @@ jobs:
           make
           make ut
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.txt
+          flags: unittests
+
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
