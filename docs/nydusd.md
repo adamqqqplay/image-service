@@ -151,6 +151,25 @@ We are working on enabling cloud-hypervisor support for nydus.
 }
 ```
 
+##### Localdisk Backend
+
+```
+{
+  "device": {
+    "backend": {
+      "type": "localdisk",
+      "config": {
+        // Mounted block device path or original localdisk image file path.
+        "device_path": "/dev/loop1"
+        //"device_path": "/home/user/ubuntu.img"
+      }
+    },
+    ...
+  },
+  ...
+}
+```
+
 ##### OSS backend with blobcache
 
 ```
