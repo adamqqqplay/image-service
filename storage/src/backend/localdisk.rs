@@ -5,8 +5,9 @@
 //! Storage backend driver to access blobs on local disks.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{Error, Result};
+use std::io::Result;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -28,9 +29,17 @@ const LOCALDISK_BLOB_ID_LEN: usize = 32;
 /// Error codes related to localdisk storage backend.
 #[derive(Debug)]
 pub enum LocalDiskError {
-    BlobFile(nix::Error),
-    ReadVecBlob(Error),
-    ReadBlob(nix::Error),
+    BlobFile(String),
+    ReadBlob(String),
+}
+
+impl fmt::Display for LocalDiskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LocalDiskError::BlobFile(s) => write!(f, "{}", s),
+            LocalDiskError::ReadBlob(s) => write!(f, "{}", s),
+        }
+    }
 }
 
 impl From<LocalDiskError> for BackendError {
@@ -71,8 +80,10 @@ impl BlobReader for LocalDiskPartition {
             self.blob_id,
         );
 
-        uio::pread(self.device_fd, buf, actual_offset as i64)
-            .map_err(|e| LocalDiskError::ReadBlob(e).into())
+        uio::pread(self.device_fd, buf, actual_offset as i64).map_err(|e| {
+            let msg = format!("failed to read data from blob {}, {}", self.blob_id, e);
+            LocalDiskError::ReadBlob(msg).into()
+        })
     }
 
     fn readv(
@@ -91,13 +102,19 @@ impl BlobReader for LocalDiskPartition {
             len += buf.len();
         }
 
-        // Guarantees that reads do not cross blob boundaries in disk
+        // Guarantees that reads do not exceed the size of the blob
         if len as u64 > self.length {
-            return Err(LocalDiskError::ReadBlob(nix::Error::EIO).into());
+            let msg = format!(
+                "failed to read data from blob {}, this read exceeds the blob size",
+                self.blob_id
+            );
+            return Err(LocalDiskError::ReadBlob(msg).into());
         }
 
-        readv(self.device_fd, &mut iovec, actual_offset)
-            .map_err(|e| LocalDiskError::ReadVecBlob(e).into())
+        readv(self.device_fd, &mut iovec, actual_offset).map_err(|e| {
+            let msg = format!("failed to read data from blob {}, {}", self.blob_id, e);
+            LocalDiskError::ReadBlob(msg).into()
+        })
     }
 
     fn metrics(&self) -> &BackendMetrics {
@@ -129,23 +146,26 @@ impl LocalDisk {
 
         let path_buf = Path::new(&path).to_path_buf().canonicalize().map_err(|e| {
             error!("failed to parse path {}: {:?}", path, e);
+            LocalDiskError::BlobFile(format!("invalid file path {}, {}", path, e));
             e
         })?;
 
         let file = OpenOptions::new().read(true).open(&path_buf).map_err(|e| {
-            error!("failed to open {}: {:?}", path, e);
+            error!("failed to open localdisk image at {}: {:?}", path, e);
+            LocalDiskError::BlobFile(format!("failed to open localdisk image at {}, {}", path, e));
             e
         })?;
 
         let local_disk = LocalDisk {
             device_file: file,
-            device_path: path,
+            device_path: path.clone(),
             metrics: BackendMetrics::new(id, "localdisk"),
             entries: RwLock::new(HashMap::new()),
         };
 
         local_disk.init().map_err(|e| {
-            error!("load disk failed {}: {:?}", local_disk.device_path, e);
+            error!("load localdisk image failed at {}: {:?}", path, e);
+            LocalDiskError::BlobFile(format!("load localdisk image failed at {}: {}", path, e));
             e
         })?;
 
@@ -161,7 +181,7 @@ impl LocalDisk {
         let partitions = disk.partitions();
         let sector_size = gpt::disk::DEFAULT_SECTOR_SIZE;
         info!(
-            "Localdisk initialized at {}, has {} patitions, GUID: {}",
+            "Localdisk backend initialized at {}, has {} patitions, GUID: {}",
             self.device_path,
             partitions.len(),
             disk.guid()
@@ -171,8 +191,8 @@ impl LocalDisk {
             let length = v.bytes_len(sector_size)?;
             let base_offset = v.bytes_start(sector_size)?;
             if base_offset.checked_add(length).is_none() {
-                error!("partition {} ends with an invalid offset", v.part_guid);
-                return Err(eio!("partition ends with an invalid offset"));
+                let msg = format!("partition {} ends with an invalid offset", v.part_guid);
+                return Err(eio!(msg));
             };
             let last_offset = base_offset + length;
             let guid = v.part_guid;
@@ -183,8 +203,8 @@ impl LocalDisk {
             };
 
             if name.is_empty() {
-                error!("partition {} does not record an blob id", v.part_guid);
-                return Err(eio!("partition does not record an blob id"));
+                let msg = format!("partition {} does not record an blob id", v.part_guid);
+                return Err(eio!(msg));
             }
 
             let partition = Arc::new(LocalDiskPartition {
@@ -216,7 +236,8 @@ impl LocalDisk {
             let new_blob_id = &blob_id[0..LOCALDISK_BLOB_ID_LEN];
             Ok(new_blob_id)
         } else {
-            Err(LocalDiskError::BlobFile(nix::Error::EIO))
+            let msg = format!("invalid blob_id: {}", blob_id);
+            Err(LocalDiskError::BlobFile(msg))
         }
     }
 
@@ -233,7 +254,11 @@ impl LocalDisk {
         if let Some(entry) = self.entries.read().unwrap().get(localdisk_blob_id) {
             Ok(entry.clone())
         } else {
-            Err(LocalDiskError::ReadBlob(nix::Error::ENOENT))
+            let msg = format!(
+                "can not find such blob: {}, this image might be corrupted",
+                blob_id
+            );
+            Err(LocalDiskError::ReadBlob(msg))
         }
     }
 }
