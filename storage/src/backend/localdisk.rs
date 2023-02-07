@@ -175,7 +175,12 @@ impl LocalDisk {
                 return Err(eio!("partition ends with an invalid offset"));
             };
             let last_offset = base_offset + length;
-            let name = v.name.clone();
+            let guid = v.part_guid;
+            let name = if v.part_type_guid == gpt::partition_types::BASIC {
+                v.name.clone() // Compatible with old versions of localdisk image
+            } else {
+                v.name.clone() + guid.to_simple().to_string().as_str() // The 64-byte blob_id is stored in two parts
+            };
 
             if name.is_empty() {
                 error!("partition {} does not record an blob id", v.part_guid);
@@ -217,8 +222,14 @@ impl LocalDisk {
 
     #[allow(clippy::mutex_atomic)]
     fn get_blob(&self, blob_id: &str) -> LocalDiskResult<Arc<dyn BlobReader>> {
+        // Try to read the full length blob_id from the hashMap, if that doesn't work, read the older version's truncated blob_id.
+        let localdisk_blob_id = if self.entries.read().unwrap().contains_key(blob_id) {
+            blob_id
+        } else {
+            LocalDisk::truncate_blob_id(blob_id)?
+        };
+
         // Don't expect poisoned lock here.
-        let localdisk_blob_id = LocalDisk::truncate_blob_id(blob_id)?;
         if let Some(entry) = self.entries.read().unwrap().get(localdisk_blob_id) {
             Ok(entry.clone())
         } else {
