@@ -145,6 +145,8 @@ pub struct LocalDisk {
     device_file: File,
     // The disk device path specified by the user
     device_path: String,
+    // Size of the block device.
+    device_capacity: u64,
     // Blobs are discovered by scanning GPT or not.
     is_gpt_mode: bool,
     // Metrics collector.
@@ -169,17 +171,63 @@ impl LocalDisk {
                 path, e
             ))
         })?;
+        let md = device_file.metadata().map_err(|e| {
+            eio!(format!(
+                "localdisk: can not get file meta data about disk device {}, {}",
+                path, e
+            ))
+        })?;
         let mut local_disk = LocalDisk {
             device_file,
             device_path: path.clone(),
+            device_capacity: md.len(),
             is_gpt_mode: false,
             metrics: BackendMetrics::new(id, "localdisk"),
             entries: RwLock::new(HashMap::new()),
         };
 
-        local_disk.scan_blobs_by_gpt()?;
+        if !config.disable_gpt {
+            local_disk.scan_blobs_by_gpt()?;
+        }
 
         Ok(local_disk)
+    }
+
+    pub fn add_blob(&self, blob_id: &str, offset: u64, length: u64) -> LocalDiskResult<()> {
+        if self.is_gpt_mode {
+            let msg = format!(
+                "localdisk: device {} is in legacy gpt mode",
+                self.device_path
+            );
+            return Err(LocalDiskError::BlobFile(msg));
+        }
+        if offset.checked_add(length).is_none() || offset + length > self.device_capacity {
+            let msg = format!(
+                "localdisk: add blob {} with invalid offset 0x{:x} and length 0x{:x}, device size 0x{:x}",
+                blob_id, offset, length, self.device_capacity
+            );
+            return Err(LocalDiskError::BlobFile(msg));
+        };
+
+        let device_file = self.device_file.try_clone().map_err(|e| {
+            LocalDiskError::BlobFile(format!("localdisk: can not duplicate file, {}", e))
+        })?;
+        let blob = Arc::new(LocalDiskBlob {
+            blob_id: blob_id.to_string(),
+            device_file,
+            blob_offset: offset,
+            blob_length: length,
+            metrics: self.metrics.clone(),
+        });
+
+        let mut table_guard = self.entries.write().unwrap();
+        if table_guard.contains_key(blob_id) {
+            let msg = format!("localdisk: blob {} already exists", blob_id);
+            return Err(LocalDiskError::BlobFile(msg));
+        }
+        table_guard.insert(blob_id.to_string(), blob);
+
+        Ok(())
     }
 
     fn get_blob(&self, blob_id: &str) -> LocalDiskResult<Arc<dyn BlobReader>> {
@@ -236,7 +284,9 @@ impl LocalDisk {
         for (k, v) in partitions {
             let length = v.bytes_len(sector_size)?;
             let base_offset = v.bytes_start(sector_size)?;
-            if base_offset.checked_add(length).is_none() {
+            if base_offset.checked_add(length).is_none()
+                || base_offset + length > self.device_capacity
+            {
                 let msg = format!(
                     "localdisk: partition {} with invalid offset and length",
                     v.part_guid
@@ -256,6 +306,10 @@ impl LocalDisk {
 
             if name.is_empty() {
                 let msg = format!("localdisk: partition {} has empty blob id", v.part_guid);
+                return Err(einval!(msg));
+            }
+            if table_guard.contains_key(&name) {
+                let msg = format!("localdisk: blob {} already exists", name);
                 return Err(einval!(msg));
             }
 
@@ -322,13 +376,46 @@ mod tests {
     fn test_invalid_localdisk_new() {
         let config = LocalDiskConfig {
             device_path: "".to_string(),
+            disable_gpt: true,
         };
         assert!(LocalDisk::new(&config, Some("test")).is_err());
 
         let config = LocalDiskConfig {
             device_path: "/a/b/c".to_string(),
+            disable_gpt: true,
         };
         assert!(LocalDisk::new(&config, None).is_err());
+    }
+
+    #[test]
+    fn test_add_disk_blob() {
+        let root_dir = &std::env::var("CARGO_MANIFEST_DIR").expect("$CARGO_MANIFEST_DIR");
+        let root_dir = Path::new(root_dir).join("../tests/texture/blobs/");
+
+        let config = LocalDiskConfig {
+            device_path: root_dir.join("nonexist_blob_file").display().to_string(),
+            disable_gpt: true,
+        };
+        assert!(LocalDisk::new(&config, Some("test")).is_err());
+
+        let blob_id = "be7d77eeb719f70884758d1aa800ed0fb09d701aaec469964e9d54325f0d5fef";
+        let config = LocalDiskConfig {
+            device_path: root_dir.join(blob_id).display().to_string(),
+            disable_gpt: true,
+        };
+        let disk = LocalDisk::new(&config, Some("test")).unwrap();
+
+        assert!(disk.add_blob(blob_id, u64::MAX, 1).is_err());
+        assert!(disk.add_blob(blob_id, 14553, 2).is_err());
+        assert!(disk.add_blob(blob_id, 14554, 1).is_err());
+        assert!(disk.add_blob(blob_id, 0, 4096).is_ok());
+        assert!(disk.add_blob(blob_id, 0, 4096).is_err());
+        let blob = disk.get_blob(blob_id).unwrap();
+        assert_eq!(blob.blob_size().unwrap(), 4096);
+
+        let mut buf = vec![0u8; 4096];
+        let sz = blob.read(&mut buf, 0).unwrap();
+        assert_eq!(sz, 4096);
     }
 
     #[cfg(feature = "backend-localdisk-gpt")]
