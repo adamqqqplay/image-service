@@ -371,6 +371,7 @@ impl Drop for LocalDisk {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
 
     #[test]
     fn test_invalid_localdisk_new() {
@@ -426,5 +427,79 @@ mod tests {
 
         let result = LocalDisk::truncate_blob_id(guid).unwrap();
         assert_eq!(result, guid_truncated)
+    }
+
+    #[test]
+    fn test_localdisk_get_blob() {
+        let mut current_path = env::current_dir().unwrap();
+        current_path.pop();
+        current_path = current_path
+            .join("tests")
+            .join("texture")
+            .join("localdisk")
+            .join("alpine-3.17.img");
+        let filename = current_path.file_name().unwrap().to_str().unwrap();
+
+        let config = LocalDiskConfig {
+            device_path: current_path.to_str().unwrap().to_string(),
+            disable_gpt: false,
+        };
+        let disk = LocalDisk::new(&config, Some(filename)).unwrap();
+        let blob1 = disk
+            .get_blob("c672e0c03973d6eeaa4f25215bb0c9e05e9a6014fb802b4d3fa78c1baab8fdda")
+            .unwrap();
+        let blob2 = disk
+            .get_blob("38b2f82c9ab93304cd90f65a13d57e83c8ad3b040dbcea4277b485a52d18dd51")
+            .unwrap();
+        assert_eq!(Arc::strong_count(&blob1), 2);
+        assert_eq!(Arc::strong_count(&blob2), 2);
+    }
+
+    #[test]
+    fn test_localdisk_get_reader() {
+        let mut current_path = env::current_dir().unwrap();
+        current_path.pop();
+        current_path = current_path
+            .join("tests")
+            .join("texture")
+            .join("localdisk")
+            .join("alpine-3.17.img");
+        let filename = current_path.file_name().unwrap().to_str().unwrap();
+
+        let config = LocalDiskConfig {
+            device_path: current_path.to_str().unwrap().to_string(),
+            disable_gpt: false,
+        };
+        let disk = LocalDisk::new(&config, Some(filename)).unwrap();
+        let blob1 = disk
+            .get_reader("c672e0c03973d6eeaa4f25215bb0c9e05e9a6014fb802b4d3fa78c1baab8fdda")
+            .unwrap();
+        let blob2 = disk
+            .get_reader("38b2f82c9ab93304cd90f65a13d57e83c8ad3b040dbcea4277b485a52d18dd51")
+            .unwrap();
+        assert_eq!(Arc::strong_count(&blob1), 2);
+        assert_eq!(Arc::strong_count(&blob2), 2);
+
+        let mut buf1 = [0x0u8];
+        blob1.read(&mut buf1, 0x0).unwrap();
+        assert_eq!(buf1[0], 31);
+
+        let mut buf2 = [0x0u8];
+        let mut buf3 = [0x0u8];
+        let bufs = [
+            unsafe { FileVolatileSlice::from_raw_ptr(buf2.as_mut_ptr(), 1) },
+            unsafe { FileVolatileSlice::from_raw_ptr(buf3.as_mut_ptr(), 1) },
+        ];
+
+        assert_eq!(blob2.readv(&bufs, 0x1, 2).unwrap(), 2);
+        assert_eq!(buf2[0], 181);
+        assert_eq!(buf3[0], 47);
+
+        assert_eq!(blob2.readv(&bufs, 0x3, 3).unwrap(), 2);
+        assert_eq!(buf2[0], 253);
+        assert_eq!(buf3[0], 160);
+
+        assert_eq!(blob2.blob_size().unwrap(), 3405824);
+        assert_eq!(blob1.blob_size().unwrap(), 15360);
     }
 }
